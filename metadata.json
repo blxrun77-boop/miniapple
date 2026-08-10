@@ -1,0 +1,6 @@
+{
+  "name": "Mediabuy Lab",
+  "description": "Telegram Mini App for media buyers: accounts store, 1-click starter pack bundles, smart cross-sell consumables, 2FA generator, BIN checker, launch checklists, and campaign services.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

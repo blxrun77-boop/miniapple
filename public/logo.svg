@@ -1,0 +1,93 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 500 500" width="100%" height="100%">
+  <defs>
+    <!-- Dark Radial Canvas Background -->
+    <radialGradient id="bgGlow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#0a122c" />
+      <stop offset="100%" stop-color="#030612" />
+    </radialGradient>
+
+    <!-- Outer Ring Neon Gradient -->
+    <linearGradient id="ringGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#38bdf8" />
+      <stop offset="45%" stop-color="#0284c7" />
+      <stop offset="80%" stop-color="#818cf8" />
+      <stop offset="100%" stop-color="#c084fc" />
+    </linearGradient>
+
+    <!-- M Body Main 3D Metallic Gradient -->
+    <linearGradient id="mBodyGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#38bdf8" />
+      <stop offset="22%" stop-color="#2563eb" />
+      <stop offset="65%" stop-color="#1d4ed8" />
+      <stop offset="100%" stop-color="#311075" />
+    </linearGradient>
+
+    <!-- Arrow Head Highlight Gradient -->
+    <linearGradient id="arrowGrad" x1="0%" y1="100%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#1d4ed8" />
+      <stop offset="50%" stop-color="#38bdf8" />
+      <stop offset="100%" stop-color="#7dd3fc" />
+    </linearGradient>
+
+    <!-- Bevel Light Face Gradient -->
+    <linearGradient id="bevelLight" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#7dd3fc" stop-opacity="0.9" />
+      <stop offset="100%" stop-color="#1d4ed8" stop-opacity="0.2" />
+    </linearGradient>
+
+    <!-- Bevel Dark Face Gradient -->
+    <linearGradient id="bevelDark" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#0f172a" stop-opacity="0.6" />
+      <stop offset="100%" stop-color="#2e1065" stop-opacity="0.9" />
+    </linearGradient>
+
+    <!-- Neon Ring Glow Filter -->
+    <filter id="ringFilter" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="6" result="blur" />
+      <feMerge>
+        <feMergeNode in="blur" />
+        <feMergeNode in="SourceGraphic" />
+      </feMerge>
+    </filter>
+
+    <!-- M Shadow Filter -->
+    <filter id="mShadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="10" stdDeviation="12" flood-color="#000000" flood-opacity="0.7" />
+      <feDropShadow dx="0" dy="0" stdDeviation="15" flood-color="#0284c7" flood-opacity="0.35" />
+    </filter>
+  </defs>
+
+  <!-- Canvas Background -->
+  <rect width="500" height="500" fill="url(#bgGlow)" rx="40" />
+
+  <!-- Glowing Outer Neon Circle -->
+  <circle cx="250" cy="250" r="195" stroke="url(#ringGrad)" stroke-width="7" fill="none" filter="url(#ringFilter)" />
+
+  <!-- Logo M Symbol Group with Drop Shadows -->
+  <g filter="url(#mShadow)">
+    <!-- Left Vertical Stem -->
+    <path d="M 152 146 L 194 146 L 194 340 L 152 340 Z" fill="url(#mBodyGrad)" />
+    <!-- Left Bevel Highlight -->
+    <path d="M 152 146 L 194 146 L 194 158 L 164 158 L 164 340 L 152 340 Z" fill="url(#bevelLight)" opacity="0.6" />
+
+    <!-- Middle V Left Slope -->
+    <path d="M 194 146 L 250 310 L 222 310 L 194 200 Z" fill="url(#bevelLight)" opacity="0.8" />
+    <!-- Middle V Right Slope -->
+    <path d="M 250 310 L 306 146 L 278 146 L 236 270 Z" fill="url(#mBodyGrad)" />
+    <!-- Middle V Core -->
+    <polygon points="194,146 250,310 306,146 276,146 250,230 224,146" fill="url(#bevelDark)" />
+
+    <!-- Right Vertical Stem Base -->
+    <path d="M 306 195 L 348 195 L 348 340 L 306 340 Z" fill="url(#mBodyGrad)" />
+    <!-- Right Stem Shadow -->
+    <path d="M 306 195 L 318 195 L 318 340 L 306 340 Z" fill="url(#bevelDark)" opacity="0.7" />
+
+    <!-- Arrow Extension (pointing up-right ↗) -->
+    <path d="M 306 195 L 360 136 L 360 182 L 346 195 Z" fill="url(#arrowGrad)" />
+    <path d="M 360 136 L 300 136 L 322 158 L 306 195 Z" fill="url(#arrowGrad)" />
+
+    <!-- Arrowhead Top Sharp Tip Accent -->
+    <polygon points="360,136 302,136 332,166" fill="url(#bevelLight)" />
+    <polygon points="360,136 360,184 332,166" fill="url(#mBodyGrad)" />
+  </g>
+</svg>

@@ -59,6 +59,38 @@ export default function AdminPage() {
     price: 0,
     stock: 50
   })
+  const [newProxyProduct, setNewProxyProduct] = useState({
+    category_id: '',
+    title: '',
+    title_en: '',
+    description: '',
+    description_en: '',
+    detailed_description: '',
+    detailed_description_en: '',
+    geo: 'US / EU / WW',
+    format: 'IP:PORT:USER:PASS:CHANGE_URL',
+    replacement_policy: 'Гарантированная замена 24 часа',
+    usage_instructions: 'Настройте прокси в антидетект браузере и проверьте IP',
+    platform: 'Proxy',
+    price: 0,
+    stock: 50
+  })
+  const [newSetupProduct, setNewSetupProduct] = useState({
+    category_id: '',
+    title: '',
+    title_en: '',
+    description: '',
+    description_en: '',
+    detailed_description: '',
+    detailed_description_en: '',
+    geo: 'WW / Global',
+    format: 'Login:Pass:2FA:Cookies + Proxy + Checklist',
+    replacement_policy: 'Замена любого элемента комплекта в течение 48 часов',
+    usage_instructions: 'Действуйте согласно чеклисту запуска и используйте чистый прокси',
+    platform: 'Setup',
+    price: 0,
+    stock: 20
+  })
   const [newContact, setNewContact] = useState({ title: '', title_en: '', link: '', kind: 'person', sort_order: 0 })
   const [newBanner, setNewBanner] = useState({
     title: '',
@@ -88,6 +120,25 @@ export default function AdminPage() {
 
   const hasAdminAccess = webAdminAuthorized
 
+  // Create post states
+  const [channelId, setChannelId] = useState('-1002061825930')
+  const [postImageFile, setPostImageFile] = useState(null)
+  const [postText, setPostText] = useState('')
+  const [postTextEn, setPostTextEn] = useState('')
+  // buttons array: supports multiple inline buttons, style and web app flag
+  const [buttons, setButtons] = useState([
+    { text: 'Открыть Mini App (Каталог)', text_en: 'Open Mini App (Catalog)', url: '', style: 'success', is_web_app: true },
+    { text: 'Наш Telegram Канал', text_en: 'Our Telegram Channel', url: 'https://t.me/mediabuy_lab', style: 'primary', is_web_app: false },
+    { text: 'Наши Менеджеры', text_en: 'Our Managers', url: '', style: 'default', is_web_app: false },
+    { text: 'Наши гарантии', text_en: 'Guarantees', url: '', style: 'default', is_web_app: false }
+  ])
+  const [previewResult, setPreviewResult] = useState(null)
+  const [scheduleAt, setScheduleAt] = useState('')
+  const [scheduleChoice, setScheduleChoice] = useState('now') // 'now' or 'pick'
+  const [channelTitle, setChannelTitle] = useState(lang === 'en' ? 'Post in Public Channel' : 'Пост в Public Channel')
+  const [channelSubscribers, setChannelSubscribers] = useState(1130)
+  const [showChannelId, setShowChannelId] = useState(false)
+
   const showStatus = (msg, type = 'info') => {
     setStatus(msg)
     setStatusType(type)
@@ -103,7 +154,8 @@ export default function AdminPage() {
     { id: 'catalog', label: t('admin.tabs.catalog') || 'Catalog', icon: ShoppingBag },
     { id: 'articles', label: t('admin.tabs.articles') || 'Articles', icon: BookOpen },
     { id: 'home', label: t('admin.tabs.home') || 'Showcase', icon: Settings },
-    { id: 'contacts', label: t('admin.tabs.contacts') || 'Contacts', icon: Users }
+    { id: 'contacts', label: t('admin.tabs.contacts') || 'Contacts', icon: Users },
+    { id: 'create_post', label: lang === 'en' ? 'Create Post' : 'Создать пост', icon: Plus }
   ]
 
   const loadAdminData = async () => {
@@ -175,8 +227,101 @@ export default function AdminPage() {
   useEffect(() => {
     if (hasAdminAccess) {
       loadAdminData()
+      loadChannelId()
     }
   }, [hasAdminAccess])
+
+  const loadChannelId = async () => {
+    try {
+      const res = await api.get('/admin/channel-id')
+      setChannelId(res.data.channel_id || '')
+    } catch (e) {
+      // ignore
+    }
+  }
+
+  const createPostDraft = async () => {
+    try {
+      const form = new FormData()
+      form.append('text', postText)
+      form.append('text_en', postTextEn)
+      form.append('buttons', JSON.stringify(buttons))
+      form.append('previewLanguage', lang)
+      if (scheduleChoice === 'pick' && scheduleAt) form.append('scheduleAt', scheduleAt)
+      if (postImageFile) form.append('image', postImageFile)
+      else form.append('use_public_image', '1')
+      if (channelTitle) form.append('channel_title', channelTitle)
+
+      const res = await api.post('/admin/posts/draft', form)
+      if (res.data && res.data.token) {
+        setPreviewResult(res.data)
+        showStatus(lang === 'en' ? 'Draft created' : 'Драфт создан', 'success')
+      } else {
+        showStatus(lang === 'en' ? 'Failed to create draft' : 'Ошибка создания драфта', 'error')
+      }
+    } catch (err) {
+      console.error(err)
+      showStatus(lang === 'en' ? 'Failed to create draft' : 'Ошибка создания драфта', 'error')
+    }
+  }
+
+  const getButtonClass = (style) => {
+    switch (style) {
+      case 'success': return 'bg-emerald-500 hover:bg-emerald-600 text-white';
+      case 'primary': return 'bg-blue-500 hover:bg-blue-600 text-white';
+      case 'danger': return 'bg-rose-500 hover:bg-rose-600 text-white';
+      default: return 'bg-slate-800 text-white';
+    }
+  }
+
+  // Create Post: manage inline buttons (copied/adapted from Showcase bot settings)
+  const addPostButton = () => {
+    const newBtn = { id: Date.now(), text: '✨ Новая кнопка', text_en: '✨ New Button', style: 'success', url: 'https://t.me/mediabuy_lab', is_web_app: false }
+    setButtons((prev) => [...prev, newBtn])
+  }
+
+  const updatePostButton = (btnId, updatedFields) => {
+    setButtons((prev) => prev.map(b => (b.id === btnId || b.id === undefined && String(b) === String(btnId)) ? { ...b, ...updatedFields } : b))
+  }
+
+  const deletePostButton = (btnId) => {
+    setButtons((prev) => prev.filter(b => !(b.id === btnId || (b.id === undefined && String(b) === String(btnId)))))
+  }
+
+  const publishDraftNow = async () => {
+    try {
+      if (!previewResult || !previewResult.token) return showStatus('No draft', 'error')
+      // publish now ignores scheduleAt and forces immediate publish
+      const res = await api.post('/admin/posts/publish', { token: previewResult.token, publishNow: '1', channel_chat_id: channelId })
+      if (res.data && res.data.ok) {
+        showStatus(lang === 'en' ? 'Published' : 'Опубликовано', 'success')
+        setPreviewResult(null)
+      } else {
+        showStatus(lang === 'en' ? 'Publish failed' : 'Ошибка публикации', 'error')
+      }
+    } catch (err) {
+      console.error(err)
+      showStatus(lang === 'en' ? 'Publish failed' : 'Ошибка публикации', 'error')
+    }
+  }
+
+  const scheduleDraft = async () => {
+    try {
+      if (!previewResult || !previewResult.token) return showStatus('No draft', 'error')
+      // if scheduleChoice is pick, use scheduleAt; otherwise treat as now
+      if (scheduleChoice !== 'pick') return showStatus(lang === 'en' ? 'Select time first' : 'Сначала выберите время', 'error')
+      const res = await api.post('/admin/posts/publish', { token: previewResult.token, publishNow: '0', scheduleAt, channel_chat_id: channelId })
+      if (res.data && res.data.scheduled) {
+        showStatus(lang === 'en' ? 'Scheduled' : 'Запланировано', 'success')
+        setPreviewResult(null)
+      } else {
+        showStatus(lang === 'en' ? 'Schedule failed' : 'Ошибка планирования', 'error')
+      }
+    } catch (err) {
+      console.error(err)
+      showStatus(lang === 'en' ? 'Schedule failed' : 'Ошибка планирования', 'error')
+    }
+  }
 
   const loginWebAdmin = async () => {
     try {
@@ -781,7 +926,7 @@ export default function AdminPage() {
                 >
                   <div className="flex flex-wrap items-center justify-between gap-2 border-b border-cyan-400/20 pb-2">
                     <div className="flex items-center gap-2">
-                      <span className="text-sm font-black text-cyan-300">Заказ #{order.id}</span>
+                      <span className="text-sm font-black text-cyan-300">Заказ #{order.order_number || order.id}</span>
                       <span className="text-xs text-slate-400">
                         ({new Date(order.created_at).toLocaleString()})
                       </span>
@@ -809,6 +954,7 @@ export default function AdminPage() {
                       <p className="text-[10px] font-bold uppercase text-slate-400">Способ / Кошелек:</p>
                       <p className="font-mono text-cyan-200 mt-0.5 truncate">{order.crypto_currency} ({order.assigned_wallet})</p>
                       <p className="text-[10px] text-slate-400 mt-1">Сумма в крипте: <span className="font-bold text-emerald-300 font-mono">{order.crypto_amount}</span></p>
+                      <p className="text-[10px] text-slate-400 mt-1">Order # <span className="font-bold text-white">{order.order_number || order.id}</span></p>
                     </div>
 
                     <div className="rounded-xl border border-slate-800 bg-black/40 p-2.5">
@@ -1945,6 +2091,149 @@ export default function AdminPage() {
           </div>
         </section>
       )}
+
+        {/* CREATE POST TAB */}
+        {activeTab === 'create_post' && (
+          <section className="rounded-3xl border border-cyan-400/30 bg-gradient-to-br from-[#071025] via-[#071426] to-[#040814] p-5 shadow-xl">
+            <h3 className="text-lg font-bold text-white flex items-center gap-3 mb-3">
+              <Plus size={18} className="text-cyan-300" /> {lang === 'en' ? 'Create Channel Post' : 'Создать пост в канал'}
+            </h3>
+
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+              {/* LEFT: form */}
+              <div className="lg:col-span-2 space-y-4">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="text-xs text-slate-400">{lang === 'en' ? 'Target Channel' : 'Целевой канал'}</label>
+                    <div className="w-full rounded-xl border border-slate-700 bg-[#04101a] px-3 py-2 text-white text-sm flex items-center justify-between">
+                      <div>
+                        <div className="text-sm font-bold">Public Channel</div>
+                        <div className="text-xs text-slate-300">{channelSubscribers} {lang === 'en' ? 'subscribers' : 'подписчиков'}</div>
+                      </div>
+                      <div className="text-xs text-slate-400">
+                        {showChannelId ? channelId : 'ID скрыт'}
+                        <button onClick={() => setShowChannelId(s => !s)} className="ml-3 text-[11px] px-2 py-1 rounded bg-slate-800 text-slate-200">{showChannelId ? (lang === 'en' ? 'Hide' : 'Скрыть') : (lang === 'en' ? 'Show' : 'Показать')}</button>
+                      </div>
+                    </div>
+                  </div>
+                  <div>
+                    <label className="text-xs text-slate-400">{lang === 'en' ? 'Channel Title (public)' : 'Заголовок для паблик канала'}</label>
+                    <input value={channelTitle} onChange={(e) => setChannelTitle(e.target.value)} placeholder={lang === 'en' ? 'Optional header for public channel' : 'Опциональный заголовок для канала'} className="w-full rounded-xl border border-slate-700 bg-[#04101a] px-3 py-2 text-white text-sm" />
+                  </div>
+                  <div>
+                    <label className="text-xs text-slate-400">{lang === 'en' ? 'Schedule (optional)' : 'Запланировать (опционально)'}</label>
+                    <div className="flex items-center gap-2">
+                      <button onClick={() => { setScheduleChoice('now'); setScheduleAt(''); }} className={`px-3 py-2 rounded-xl text-sm font-bold ${scheduleChoice === 'now' ? 'bg-cyan-600 text-white' : 'bg-slate-800 text-slate-300'}`}>{lang === 'en' ? 'Now' : 'Сейчас'}</button>
+                      <button onClick={() => setScheduleChoice('pick')} className={`px-3 py-2 rounded-xl text-sm font-bold ${scheduleChoice === 'pick' ? 'bg-cyan-600 text-white' : 'bg-slate-800 text-slate-300'}`}>{lang === 'en' ? 'Pick time' : 'Указать время'}</button>
+                      {scheduleChoice === 'pick' && (
+                        <input type="datetime-local" value={scheduleAt} onChange={(e) => setScheduleAt(e.target.value)} className="ml-2 rounded-xl border border-slate-700 bg-[#04101a] px-3 py-2 text-white text-sm" />
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="text-xs text-slate-400">{lang === 'en' ? 'Post text (RU)' : 'Текст поста (RU)'}</label>
+                    <textarea value={postText} onChange={(e) => setPostText(e.target.value)} rows={6} className="w-full rounded-2xl border border-slate-700 bg-[#03101a] px-3 py-2 text-white text-sm" />
+                  </div>
+                  <div>
+                    <label className="text-xs text-slate-400">{lang === 'en' ? 'Post text (EN)' : 'Текст поста (EN)'}</label>
+                    <textarea value={postTextEn} onChange={(e) => setPostTextEn(e.target.value)} rows={6} className="w-full rounded-2xl border border-slate-700 bg-[#03101a] px-3 py-2 text-white text-sm" />
+                  </div>
+                </div>
+
+                <div className="rounded-2xl border border-slate-700 bg-[#021019] p-4 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <h4 className="text-sm font-bold text-white">{lang === 'en' ? 'Inline buttons' : 'Кнопки Inline-клавиатуры'}</h4>
+                    <button onClick={addPostButton} className="text-xs bg-cyan-600 px-3 py-1 rounded-full font-bold">{lang === 'en' ? 'Add button' : 'Добавить кнопку'}</button>
+                  </div>
+
+                  <div className="space-y-3">
+                    {buttons.map((btn, idx) => (
+                      <div key={idx} className="grid grid-cols-1 lg:grid-cols-12 gap-2 items-center">
+                        <div className="lg:col-span-4">
+                          <input value={btn.text} onChange={(e) => updatePostButton(btn.id ?? idx, { text: e.target.value })} placeholder={lang === 'en' ? 'Text (RU)' : 'Текст (RU)'} className="w-full rounded-xl border border-slate-700 bg-[#011018] px-3 py-2 text-white text-sm" />
+                        </div>
+                        <div className="lg:col-span-4">
+                          <input value={btn.text_en || ''} onChange={(e) => updatePostButton(btn.id ?? idx, { text_en: e.target.value })} placeholder={lang === 'en' ? 'Text (EN)' : 'Текст (EN)'} className="w-full rounded-xl border border-slate-700 bg-[#011018] px-3 py-2 text-white text-sm" />
+                        </div>
+                        <div className="lg:col-span-2">
+                          <input value={btn.url} onChange={(e) => updatePostButton(btn.id ?? idx, { url: e.target.value })} placeholder="URL" className="w-full rounded-xl border border-slate-700 bg-[#011018] px-3 py-2 text-white text-sm" />
+                        </div>
+                        <div className="lg:col-span-1">
+                          <select value={btn.style || 'default'} onChange={(e) => updatePostButton(btn.id ?? idx, { style: e.target.value })} className="w-full rounded-xl border border-slate-700 bg-[#011018] px-3 py-2 text-white text-sm">
+                            <option value="success">Green (success)</option>
+                            <option value="primary">Blue (primary)</option>
+                            <option value="danger">Red (danger)</option>
+                            <option value="default">Gray (default)</option>
+                          </select>
+                        </div>
+                        <div className="lg:col-span-1 flex items-center gap-2">
+                          <label className="flex items-center gap-2 text-xs text-slate-300"><input type="checkbox" checked={!!btn.is_web_app} onChange={(e) => updatePostButton(btn.id ?? idx, { is_web_app: e.target.checked })} /> Mini App</label>
+                          <button onClick={() => deletePostButton(btn.id ?? idx)} className="rounded-full bg-rose-600 px-3 py-1 text-xs font-bold">Delete</button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 items-end">
+                  <div>
+                    <label className="text-xs text-slate-400">{lang === 'en' ? 'Attach image (optional)' : 'Прикрепить изображение (опционально)'}</label>
+                    <input type="file" accept="image/*" onChange={(e) => setPostImageFile(e.target.files && e.target.files[0])} className="w-full mt-2" />
+                  </div>
+                  <div className="flex gap-2">
+                    <button onClick={createPostDraft} className="rounded-2xl bg-cyan-600 px-4 py-2 text-sm font-bold">{lang === 'en' ? 'Create Draft & Preview' : 'Создать драфт и предпросмотр'}</button>
+                    {previewResult && (
+                      <>
+                        <button onClick={publishDraftNow} className="rounded-2xl bg-emerald-600 px-4 py-2 text-sm font-bold">{lang === 'en' ? 'Publish Now' : 'Опубликовать сейчас'}</button>
+                        <button onClick={scheduleDraft} className="rounded-2xl bg-yellow-600 px-4 py-2 text-sm font-bold">{lang === 'en' ? 'Schedule' : 'Запланировать'}</button>
+                      </>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              {/* RIGHT: preview panel */}
+              <div className="lg:col-span-1">
+                <div className="rounded-2xl border border-cyan-500/20 bg-[#071623] p-4">
+                  <div className="rounded-xl bg-gradient-to-r from-[#0b2540] to-[#05223a] p-4">
+                    <div className="flex items-center gap-3">
+                      <div className="h-12 w-12 rounded-full bg-cyan-800 flex items-center justify-center font-bold text-white">ML</div>
+                      <div>
+                        <div className="text-sm font-bold text-white">Mediabuy Lab — Эксперты в Арбитраже & Медиабайнинге</div>
+                        <div className="text-xs text-slate-300">Официальный бот</div>
+                      </div>
+                    </div>
+                    <div className="mt-3 rounded-lg overflow-hidden border bg-black/40">
+                      {previewResult && previewResult.previewImageUrl ? (
+                        <img src={previewResult.previewImageUrl} alt="preview" className="w-full h-32 object-cover" />
+                      ) : (
+                        <div className="h-32 bg-gradient-to-r from-cyan-700 to-blue-600 flex items-center justify-center text-white font-bold">Preview Image</div>
+                      )}
+                      <div className="p-3">
+                        <div className="text-xs text-slate-300 whitespace-pre-wrap">{previewResult ? previewResult.previewText : lang === 'en' ? 'Preview will appear here' : 'Здесь появится предпросмотр'}</div>
+                        <div className="mt-3 space-y-2">
+                          {buttons.map((b, i) => (
+                            <div key={i} className={`flex items-center justify-between rounded-xl px-3 py-2 ${getButtonClass(b.style)}`}>
+                              <div className="flex items-center gap-2">
+                                {b.is_web_app && <span className="text-[10px] px-2 py-0.5 bg-black/30 rounded text-white font-black">MINI APP</span>}
+                                <span className="text-sm font-bold">{lang === 'en' ? (b.text_en || b.text) : b.text}</span>
+                              </div>
+                              <div className="text-xs opacity-80">{b.url || ''}</div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                    <div className="mt-3 text-[10px] text-slate-400">Telegram Bot API · InlineKeyboardButton style: success | danger | primary</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </section>
+        )}
     </PageShell>
   )
 }

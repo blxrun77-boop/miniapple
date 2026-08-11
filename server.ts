@@ -5,6 +5,7 @@ import fs from 'fs';
 import cors from 'cors';
 import jwt from 'jsonwebtoken';
 import multer from 'multer';
+import FormData from 'form-data';
 import { createServer as createViteServer } from 'vite';
 
 const PORT = Number(process.env.PORT) || 3000;
@@ -124,6 +125,8 @@ interface BotButton {
   is_web_app?: boolean;
 }
 
+type SupportedLanguage = 'ru' | 'en';
+
 interface HomeSettings {
   id: number;
   logo_text: string;
@@ -137,7 +140,9 @@ interface HomeSettings {
   training_title: string;
   training_image_url: string | null;
   bot_menu_title: string;
+  bot_menu_title_en?: string;
   bot_menu_description: string;
+  bot_menu_description_en?: string;
   bot_menu_image_url: string | null;
   bot_buttons?: BotButton[];
 }
@@ -149,6 +154,108 @@ interface User {
   first_name?: string | null;
   last_name?: string | null;
   next_order_discount_percent: number;
+  is_admin?: boolean;
+  preferred_language?: SupportedLanguage;
+}
+
+const TELEGRAM_LANGUAGE_TEXTS = {
+  ru: {
+    choose_language: 'Привет! Выберите язык бота, чтобы продолжить:',
+    language_selected: 'Язык выбран: Русский.\n\nТеперь все сообщения бота будут приходить на русском.',
+    main_menu: '📱 Главное меню',
+    change_language: '🌐 Сменить язык',
+    access_denied: '⛔️ <b>Доступ ограничен</b>\n\nУ вас нет прав администратора.',
+    admin_panel_title: '⚙️ <b>ПАНЕЛЬ АДМИНИСТРАТОРА Mediabuy Lab</b>',
+    admin_panel_intro: 'Приветствуем в административном меню управления!',
+    admin_stats_title: '📊 <b>СТАТИСТИКА И СВОДКА (АДМИН)</b>',
+    admin_wallets_title: '💳 <b>КОШЕЛЬКИ ДЛЯ ПРИЕМА ОПЛАТЫ</b>',
+    admin_wallets_note: 'Вы можете изменить эти кошельки через переменные окружения (.env) или в Admin Mini App.',
+    managers_title: '👨‍💻 <b>Наши Менеджеры Mediabuy Lab</b>',
+    guarantees_title: '🛡️ <b>Гарантии качества Mediabuy Lab</b>',
+    docs_title: '🏛 <b>Официальная регистрация Mediabuy Lab (Companies House)</b>',
+    docs_body: 'Мы являемся официально зарегистрированной компанией в государственном реестре Великобритании (Companies House, № 10549229).',
+    docs_link: '🏛 Открыть реестр Великобритании',
+    docs_open_section: '📱 Открыть раздел в Mini App',
+    open_mini_app: '🚀 Открыть Mini App',
+  },
+  en: {
+    choose_language: 'Welcome! Please select your language to continue:',
+    language_selected: 'Language selected: English.\n\nYou will receive all bot messages in English.',
+    main_menu: '📱 Main Menu',
+    change_language: '🌐 Change language',
+    access_denied: '⛔️ <b>Access Denied</b>\n\nYou do not have administrator rights.',
+    admin_panel_title: '⚙️ <b>ADMIN PANEL Mediabuy Lab</b>',
+    admin_panel_intro: 'Welcome to the administration control panel!',
+    admin_stats_title: '📊 <b>ADMIN STATISTICS & SUMMARY</b>',
+    admin_wallets_title: '💳 <b>PAYMENT WALLETS</b>',
+    admin_wallets_note: 'You can change these wallets via environment variables (.env) or in the Admin Mini App.',
+    managers_title: '👨‍💻 <b>Our Mediabuy Lab Managers</b>',
+    guarantees_title: '🛡️ <b>Mediabuy Lab Quality Guarantees</b>',
+    docs_title: '🏛 <b>Official Mediabuy Lab Registration (Companies House)</b>',
+    docs_body: 'We are an officially registered company in the UK Companies House registry (No. 10549229).',
+    docs_link: '🏛 Open UK Companies House record',
+    docs_open_section: '📱 Open section in Mini App',
+    open_mini_app: '🚀 Open Mini App',
+  },
+} as const;
+
+function getUserByTelegramId(tgId: number): User | null {
+  return users.find((u) => u.telegram_id === tgId) || null;
+}
+
+function isValidLanguage(value: any): value is SupportedLanguage {
+  return value === 'ru' || value === 'en';
+}
+
+function getPreferredLanguage(user: User | null | undefined): SupportedLanguage {
+  if (!user || !isValidLanguage(user.preferred_language)) return 'ru';
+  return user.preferred_language;
+}
+
+function localize(user: User | null | undefined, ruText: string, enText: string): string {
+  return getPreferredLanguage(user) === 'en' ? enText : ruText;
+}
+
+function localizeButtonText(user: User | null | undefined, btn: BotButton): string {
+  if (getPreferredLanguage(user) === 'en') {
+    return btn.text_en || btn.text;
+  }
+  return btn.text;
+}
+
+function getLocaleText(user: User | null | undefined, key: keyof typeof TELEGRAM_LANGUAGE_TEXTS.ru): string {
+  const lang = getPreferredLanguage(user);
+  return TELEGRAM_LANGUAGE_TEXTS[lang][key];
+}
+
+async function sendLanguageSelectionMessage(botToken: string, chatId: number, messageId?: number) {
+  const text = `🌐 <b>Выберите язык / Choose your language:</b>\n\n` +
+    `🇷🇺 Русский\n🇬🇧 English`;
+  const inline_keyboard = [
+    [{ text: '🇷🇺 Русский', callback_data: 'action_set_language_ru' }],
+    [{ text: '🇬🇧 English', callback_data: 'action_set_language_en' }],
+  ];
+  await sendOrEditTelegramMessage(botToken, chatId, text, inline_keyboard, messageId);
+}
+
+async function setUserLanguage(botToken: string, chatId: number, language: SupportedLanguage, messageId?: number) {
+  let user = getUserByTelegramId(chatId);
+  if (!user) {
+    user = {
+      id: users.length + 1,
+      telegram_id: chatId,
+      next_order_discount_percent: 0,
+      preferred_language: language,
+    };
+    users.push(user);
+  } else {
+    user.preferred_language = language;
+  }
+
+  const text = getLocaleText(user, 'language_selected');
+  const inline_keyboard = [[{ text: getLocaleText(user, 'main_menu'), callback_data: 'action_main_menu' }]];
+  await sendOrEditTelegramMessage(botToken, chatId, text, inline_keyboard, messageId);
+  await sendBotMenuMessage(botToken, chatId);
 }
 
 interface CartItem {
@@ -168,6 +275,8 @@ interface OrderItem {
 
 interface Order {
   id: number;
+  order_number: string;
+  telegram_user_id?: number;
   user_id: number;
   currency: string;
   total_amount: number;
@@ -184,6 +293,363 @@ interface Order {
   txid?: string | null;
   payment_verified_auto?: boolean;
   delivered_data?: string | null;
+}
+
+function generateOrderNumber(): string {
+  let code: string;
+  do {
+    code = String(Math.floor(100000 + Math.random() * 900000));
+  } while (orders.some((o) => o.order_number === code));
+  return code;
+}
+
+interface AdminPostDraft {
+  token: string;
+  user_id: number;
+  chat_id: number;
+  text: string;
+  text_en?: string | null;
+  image_url?: string | null;
+  buttons: Array<{ text: string; text_en?: string | null; url: string }>;
+  channel_title?: string | null;
+  scheduleAt?: string;
+  previewLanguage?: SupportedLanguage;
+  state?: string;
+  tempButton?: { text?: string; url?: string; style?: string } | null;
+}
+
+const adminPostDrafts: Record<string, AdminPostDraft> = {};
+const adminDraftSessions: Record<number, string> = {};
+
+function generateDraftToken(): string {
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function parseScheduleValue(value: string): string | undefined {
+  const normalized = value.trim();
+  if (!normalized) return undefined;
+
+  const relativeMatch = normalized.match(/^\s*(?:in|after)\s*(\d+)\s*(m|min|h|hr|d)s?\s*$/i);
+  if (relativeMatch) {
+    const amount = Number(relativeMatch[1]);
+    const unit = relativeMatch[2].toLowerCase();
+    let ms = 0;
+    if (unit.startsWith('d')) ms = amount * 24 * 60 * 60 * 1000;
+    else if (unit.startsWith('h')) ms = amount * 60 * 60 * 1000;
+    else ms = amount * 60 * 1000;
+    const date = new Date(Date.now() + ms);
+    return date.toISOString();
+  }
+
+  let iso = normalized;
+  if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/.test(iso)) {
+    iso = iso.replace(' ', 'T');
+  }
+  if (/^\d{2}:\d{2}$/.test(iso)) {
+    const today = new Date();
+    iso = `${today.toISOString().slice(0, 10)}T${iso}:00`;
+  }
+
+  const date = new Date(iso);
+  if (!isNaN(date.getTime()) && date.getTime() > Date.now()) {
+    return date.toISOString();
+  }
+  return undefined;
+}
+
+function parseAdminPostPayload(rawText: string, chatId: number, userId: number): AdminPostDraft | null {
+  const bodyText = rawText.replace(/^\/admin_post\b/i, '').trim();
+  const lines = bodyText.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  if (lines.length === 0) return null;
+
+  const draft: AdminPostDraft = {
+    token: generateDraftToken(),
+    user_id: userId,
+    chat_id: chatId,
+    text: '',
+    buttons: [],
+  };
+
+  const textPartsRu: string[] = [];
+  const textPartsEn: string[] = [];
+
+  for (const line of lines) {
+    const lower = line.toLowerCase();
+    if (lower.startsWith('image:')) {
+      draft.image_url = line.slice(6).trim();
+      continue;
+    }
+    if (lower.startsWith('button_ru:')) {
+      const payload = line.slice(9).trim();
+      const [buttonText, buttonUrl] = payload.split('|').map((part) => part.trim());
+      if (buttonText && buttonUrl) {
+        draft.buttons.push({ text: buttonText, text_en: null, url: buttonUrl });
+      }
+      continue;
+    }
+    if (lower.startsWith('button_en:')) {
+      const payload = line.slice(10).trim();
+      const [buttonText, buttonUrl] = payload.split('|').map((part) => part.trim());
+      if (buttonText && buttonUrl) {
+        draft.buttons.push({ text: '', text_en: buttonText, url: buttonUrl });
+      }
+      continue;
+    }
+    if (lower.startsWith('button:')) {
+      const payload = line.slice(7).trim();
+      const [buttonText, buttonUrl] = payload.split('|').map((part) => part.trim());
+      if (buttonText && buttonUrl) {
+        draft.buttons.push({ text: buttonText, url: buttonUrl });
+      }
+      continue;
+    }
+    if (lower.startsWith('schedule:')) {
+      const scheduleValue = line.slice(9).trim();
+      const parsed = parseScheduleValue(scheduleValue);
+      if (parsed) {
+        draft.scheduleAt = parsed;
+      }
+      continue;
+    }
+    if (lower.startsWith('ru:')) {
+      textPartsRu.push(line.slice(3).trim());
+      continue;
+    }
+    if (lower.startsWith('en:')) {
+      textPartsEn.push(line.slice(3).trim());
+      continue;
+    }
+    textPartsRu.push(line);
+    textPartsEn.push(line);
+  }
+
+  draft.text = textPartsRu.join('\n');
+  draft.text_en = textPartsEn.length ? textPartsEn.join('\n') : undefined;
+  if (!draft.text && !draft.text_en && !draft.image_url) {
+    return null;
+  }
+  if (!draft.text_en) {
+    draft.text_en = draft.text;
+  }
+  return draft;
+}
+
+function getDraftPreviewLanguage(user: User | null | undefined, draft: AdminPostDraft): SupportedLanguage {
+  if (draft.previewLanguage && isValidLanguage(draft.previewLanguage)) {
+    return draft.previewLanguage;
+  }
+  if (user && isValidLanguage(user.preferred_language)) {
+    return user.preferred_language;
+  }
+  return 'ru';
+}
+
+function chooseLanguageLabel(lang: SupportedLanguage, ruText: string, enText: string) {
+  return lang === 'en' ? enText : ruText;
+}
+
+function getDraftText(draft: AdminPostDraft, language: SupportedLanguage): string {
+  if (language === 'en') {
+    return draft.text_en || draft.text || '';
+  }
+  return draft.text || draft.text_en || '';
+}
+
+function getDraftButtonText(btn: { text: string; text_en?: string | null }, language: SupportedLanguage): string {
+  if (language === 'en') {
+    return btn.text_en || btn.text || '';
+  }
+  return btn.text || btn.text_en || '';
+}
+
+function buildPostCaption(draft: AdminPostDraft, language: SupportedLanguage): string {
+  let caption = ''
+  if (draft.channel_title) {
+    caption += `<b>${draft.channel_title}</b>\n\n`;
+  }
+  caption += getDraftText(draft, language);
+  return caption;
+}
+
+function buildAdminPostPreviewText(user: User | null | undefined, draft: AdminPostDraft): string {
+  const previewLanguage = getDraftPreviewLanguage(user, draft);
+  let previewText = chooseLanguageLabel(previewLanguage, '📢 <b>Предпросмотр поста для канала</b>\n\n', '📢 <b>Channel Post Preview</b>\n\n');
+  if (draft.channel_title) {
+    previewText += `<b>${draft.channel_title}</b>\n\n`;
+  }
+  const postText = getDraftText(draft, previewLanguage);
+  if (postText) {
+    previewText += `${postText}\n\n`;
+  }
+  const rootImagePath = path.join(process.cwd(), 'post_picture.png');
+  const publicImagePath = path.join(process.cwd(), 'public', 'post_picture.png');
+  const previewImage = draft.image_url || (fs.existsSync(rootImagePath) ? 'post_picture.png' : (fs.existsSync(publicImagePath) ? 'public/post_picture.png' : undefined));
+  if (previewImage) {
+    previewText += chooseLanguageLabel(previewLanguage, 'Изображение:', 'Image:') + ` ${previewImage}\n`;
+  }
+  const buttons = draft.buttons || [];
+  if (buttons.length) {
+    previewText += chooseLanguageLabel(previewLanguage, 'Кнопки:', 'Buttons:') + '\n';
+    for (const btn of buttons) {
+      const buttonText = getDraftButtonText(btn, previewLanguage);
+      if (buttonText) {
+        previewText += `• ${buttonText} — ${btn.url}\n`;
+      }
+    }
+    previewText += '\n';
+  }
+  if (draft.scheduleAt) {
+    previewText += chooseLanguageLabel(previewLanguage, 'Запланировано на:', 'Scheduled at:') + ` ${formatScheduleForDisplay(draft.scheduleAt)}\n\n`;
+  }
+  previewText += chooseLanguageLabel(previewLanguage, 'Нажмите кнопку ниже, чтобы опубликовать, запланировать или отменить.', 'Tap a button below to publish, schedule, or cancel.');
+  return previewText;
+}
+
+async function sendLanguageSelectionForAdminPost(botToken: string, chatId: number, draft: AdminPostDraft, messageId?: number) {
+  const text = `🌐 <b>Выберите удобный язык для предпросмотра поста:</b>\n\n` +
+    `🇷🇺 Русский\n🇬🇧 English`;
+  const inline_keyboard = [
+    [{ text: '🇷🇺 Русский', callback_data: `admin_post_set_language:${draft.token}:ru` }],
+    [{ text: '🇬🇧 English', callback_data: `admin_post_set_language:${draft.token}:en` }],
+    [{ text: '❌ Cancel', callback_data: `admin_post_cancel:${draft.token}` }],
+  ];
+  await sendOrEditTelegramMessage(botToken, chatId, text, inline_keyboard, messageId);
+}
+
+async function sendChannelPost(botToken: string, draft: AdminPostDraft, overrideChannelId?: string) {
+  const channelChatId = overrideChannelId || process.env.PUBLIC_CHANNEL_CHAT_ID || process.env.TELEGRAM_CHANNEL_CHAT_ID || process.env.TELEGRAM_CHANNEL_ID || process.env.ADMIN_CHANNEL_ID;
+  if (!channelChatId) {
+    throw new Error('Channel chat ID is not configured in environment variables');
+  }
+
+  const replyMarkup: any = {
+    inline_keyboard: draft.buttons.map((btn) => [{ text: btn.text, url: btn.url, style: (btn as any).style || 'primary' }]),
+  };
+  const language = getDraftPreviewLanguage(getUserByTelegramId(draft.user_id), draft);
+
+  // Determine if we have a local image: uploaded draft.image_url (local path), default root/public image, or a remote URL
+  const rootLocalPath = path.join(process.cwd(), 'post_picture.png');
+  const publicLocalPath = path.join(process.cwd(), 'public', 'post_picture.png');
+  let chosenLocalPath: string | null = null;
+  if (fs.existsSync(rootLocalPath)) chosenLocalPath = rootLocalPath;
+  else if (fs.existsSync(publicLocalPath)) chosenLocalPath = publicLocalPath;
+
+  // If draft.image_url is set and points to a local file path (uploads/...), prefer it
+  let draftLocalImagePath: string | null = null;
+  if (draft.image_url && typeof draft.image_url === 'string' && !draft.image_url.startsWith('http')) {
+    const candidate = path.isAbsolute(draft.image_url) ? draft.image_url : path.join(process.cwd(), draft.image_url);
+    if (fs.existsSync(candidate)) draftLocalImagePath = candidate;
+  }
+
+  // Decide sending method
+  if (draftLocalImagePath || chosenLocalPath) {
+    const localPathToSend = draftLocalImagePath || chosenLocalPath!;
+    const formData = new FormData();
+    formData.append('chat_id', channelChatId);
+    formData.append('photo', fs.createReadStream(localPathToSend));
+    formData.append('caption', buildPostCaption(draft, language));
+    formData.append('parse_mode', 'HTML');
+    formData.append('reply_markup', JSON.stringify(replyMarkup));
+
+    const headers = (formData as any).getHeaders ? (formData as any).getHeaders() : {};
+    const res = await fetch(`https://api.telegram.org/bot${botToken}/sendPhoto`, {
+      method: 'POST',
+      headers,
+      body: formData,
+    });
+    const data = (await res.json()) as any;
+    if (!data.ok) {
+      throw new Error(`Telegram sendPhoto failed: ${JSON.stringify(data)}`);
+    }
+  } else if (draft.image_url && draft.image_url.startsWith('http')) {
+    const res = await fetch(`https://api.telegram.org/bot${botToken}/sendPhoto`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        chat_id: channelChatId,
+        photo: draft.image_url,
+        caption: buildPostCaption(draft, language),
+        parse_mode: 'HTML',
+        reply_markup: replyMarkup,
+      }),
+    });
+    const data = (await res.json()) as any;
+    if (!data.ok) {
+      throw new Error(`Telegram sendPhoto failed: ${JSON.stringify(data)}`);
+    }
+  } else {
+    const res = await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        chat_id: channelChatId,
+        text: buildPostCaption(draft, language),
+        parse_mode: 'HTML',
+        disable_web_page_preview: false,
+        reply_markup: replyMarkup,
+      }),
+    });
+    const data = (await res.json()) as any;
+    if (!data.ok) {
+      throw new Error(`Telegram sendMessage failed: ${JSON.stringify(data)}`);
+    }
+  }
+}
+
+function formatScheduleForDisplay(isoString: string): string {
+  try {
+    const date = new Date(isoString);
+    return date.toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+  } catch {
+    return isoString;
+  }
+}
+
+function scheduleAdminPost(botToken: string, draft: AdminPostDraft) {
+  if (!draft.scheduleAt) return;
+  const when = new Date(draft.scheduleAt).getTime();
+  const delay = Math.max(0, when - Date.now());
+  setTimeout(async () => {
+    try {
+      await sendChannelPost(botToken, draft);
+      const adminMsg = `✅ Отложенный пост опубликован в канале по расписанию ${formatScheduleForDisplay(draft.scheduleAt!)}.`;
+      await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ chat_id: draft.chat_id, text: adminMsg, parse_mode: 'HTML' }),
+      });
+    } catch (err) {
+      console.error('Scheduled admin post failed:', err);
+    }
+    delete adminPostDrafts[draft.token];
+  }, delay);
+}
+
+function buildAdminPostPreviewButtons(draft: AdminPostDraft, previewLanguage: SupportedLanguage): any[][] {
+  const buttons: any[][] = [
+    [{ text: chooseLanguageLabel(previewLanguage, 'Опубликовать сейчас', 'Publish now'), callback_data: `admin_post_publish:${draft.token}` }],
+    [{ text: chooseLanguageLabel(previewLanguage, 'Отмена', 'Cancel'), callback_data: `admin_post_cancel:${draft.token}` }],
+  ];
+  if (draft.scheduleAt) {
+    buttons.unshift([{ text: chooseLanguageLabel(previewLanguage, `Запланировано на ${formatScheduleForDisplay(draft.scheduleAt)}`, `Scheduled at ${formatScheduleForDisplay(draft.scheduleAt)}`), callback_data: `admin_post_schedule:${draft.token}` }]);
+  }
+  return buttons;
+}
+
+async function sendAdminPostHelpMessage(botToken: string, chatId: number, messageId?: number) {
+  const text = `📢 <b>Admin Post Command</b>\n\n` +
+    `Use <code>/admin_post</code> followed by message text and optional metadata lines:\n` +
+    `<code>image:</code> photo URL\n` +
+    `<code>button:</code> Button Label|https://example.com\n` +
+    `<code>schedule:</code> YYYY-MM-DD HH:mm or in 30m\n\n` +
+    `Example:\n` +
+    `/admin_post\n` +
+    `Новое предложение на канале: ФБ сетап + прокси\n` +
+    `image: https://example.com/image.jpg\n` +
+    `button: Открыть каталог|https://t.me/mediabuy_lab\n` +
+    `schedule: in 15m`;
+
+  await sendOrEditTelegramMessage(botToken, chatId, text, [[{ text: '📌 Got it', callback_data: 'action_main_menu' }]], messageId);
 }
 
 // --- DIRECT CRYPTO PAYMENT MULTI-WALLET ENGINE (ROUND-ROBIN) ---
@@ -1089,7 +1555,7 @@ async function notifyCustomerAboutOrderStatus(order: Order, newStatus: string, c
     })
     .join('\n');
 
-  let text = `${statusEmoji} <b>УВЕДОМЛЕНИЕ ПО ЗАКАЗУ #${order.id}</b>\n` +
+  let text = `${statusEmoji} <b>УВЕДОМЛЕНИЕ ПО ЗАКАЗУ #${order.order_number}</b>\n` +
     `────────────────────────\n` +
     `Статус заказа: <b>${statusTitle}</b>\n` +
     `Сумма: <b>$${order.total_amount.toFixed(2)} USD</b> (${order.crypto_amount})\n` +
@@ -1129,7 +1595,7 @@ async function notifyCustomerAboutOrderStatus(order: Order, newStatus: string, c
         reply_markup: { inline_keyboard },
       }),
     });
-    console.log(`[Push Notification Sent]: Order #${order.id} status '${newStatus}' sent to TG ID ${user.telegram_id}`);
+    console.log(`[Push Notification Sent]: Order #${order.order_number} status '${newStatus}' sent to TG ID ${user.telegram_id}`);
   } catch (err) {
     console.error('Failed to send push notification to user:', err);
   }
@@ -1209,6 +1675,7 @@ async function startTelegramBotPolling() {
           { command: 'start', description: '🚀 Главное меню & Mini App' },
           { command: 'menu', description: '📱 Показать главное меню' },
           { command: 'contacts', description: '👨‍💻 Контакты и менеджеры' },
+          { command: 'admin_post', description: '📢 Admin channel post (admins only)' },
         ],
       }),
     });
@@ -1277,14 +1744,92 @@ async function handleTelegramUpdate(botToken: string, update: any) {
       chatId = update.message.chat.id;
       const text = (update.message.text || '').trim();
 
+      // Interactive admin draft flow: handle uploaded photo / text when session exists
+      if (chatId && adminDraftSessions[chatId]) {
+        const token = adminDraftSessions[chatId];
+        const draft = adminPostDrafts[token];
+        const userTgId = fromUser?.id || chatId;
+        const user = getUserByTelegramId(userTgId);
+        if (!draft) {
+          delete adminDraftSessions[chatId];
+        } else {
+          // Photo upload
+          if (update.message.photo && draft.state === 'awaiting_image') {
+            const photos = update.message.photo as any[];
+            const fileId = photos[photos.length - 1].file_id;
+            draft.image_url = fileId;
+            draft.state = 'awaiting_text';
+            const prompt = localize(user, 'Фото получено. Шаг 2/4: Отправьте текст поста.', 'Photo received. Step 2/4: Send post text.');
+            await sendOrEditTelegramMessage(botToken, chatId, prompt, [[{ text: '❌ Отмена', callback_data: `admin_post_cancel:${token}` }]], update.message.message_id);
+            return;
+          }
+
+          // Text for post
+          if (text && draft.state === 'awaiting_text') {
+            const parsed = parseAdminPostPayload(`/admin_post\n${text}`, chatId, draft.user_id);
+            if (parsed) {
+              draft.text = parsed.text || '';
+              draft.text_en = parsed.text_en || parsed.text || '';
+              // merge buttons if any
+              if (parsed.buttons && parsed.buttons.length) draft.buttons = parsed.buttons;
+            } else {
+              draft.text = text;
+              draft.text_en = text;
+            }
+            draft.state = 'awaiting_button_choice';
+            const kb = [
+              [{ text: localize(user, 'Добавить кнопку', 'Add button'), callback_data: `admin_post_add_button:${token}` }],
+              [{ text: localize(user, 'Пропустить', 'Skip'), callback_data: `admin_post_no_button:${token}` }],
+              [{ text: localize(user, 'Отмена', 'Cancel'), callback_data: `admin_post_cancel:${token}` }],
+            ];
+            await sendOrEditTelegramMessage(botToken, chatId, localize(user, 'Шаг 3/4: Хотите добавить кнопку?', 'Step 3/4: Do you want to add a button?'), kb, update.message.message_id);
+            return;
+          }
+
+          // Button text|url
+          if (text && draft.state === 'awaiting_button') {
+            const parts = text.split('|').map((p) => p.trim());
+            if (parts.length >= 2) {
+              draft.tempButton = { text: parts[0], url: parts[1] };
+              // ask for color
+              const kb = [
+                [{ text: 'Зелёная', callback_data: `admin_post_set_button_color:${token}:success` }],
+                [{ text: 'Синяя', callback_data: `admin_post_set_button_color:${token}:primary` }],
+                [{ text: 'Красная', callback_data: `admin_post_set_button_color:${token}:danger` }],
+                [{ text: 'По умолчанию', callback_data: `admin_post_set_button_color:${token}:default` }],
+              ];
+              await sendOrEditTelegramMessage(botToken, chatId, localize(user, 'Выберите цвет кнопки', 'Choose button color'), kb, update.message.message_id);
+            } else {
+              await sendOrEditTelegramMessage(botToken, chatId, localize(user, 'Неверный формат. Используйте: Текст кнопки|https://example.com', 'Invalid format. Use: Button Text|https://example.com'), [[{ text: '❌ Отмена', callback_data: `admin_post_cancel:${token}` }]], update.message.message_id);
+            }
+            return;
+          }
+
+          // Schedule input
+          if (text && draft.state === 'awaiting_schedule_input') {
+            const parsed = parseScheduleValue(text);
+            if (!parsed) {
+              await sendOrEditTelegramMessage(botToken, chatId, localize(user, 'Неверный формат времени. Попробуйте снова.', 'Invalid time format. Try again.'), [[{ text: '❌ Отмена', callback_data: `admin_post_cancel:${token}` }]], update.message.message_id);
+              return;
+            }
+            draft.scheduleAt = parsed;
+            draft.state = 'preview';
+            // show preview language selection
+            await sendLanguageSelectionForAdminPost(botToken, chatId, draft, update.message.message_id);
+            return;
+          }
+        }
+      }
+
       if (text.startsWith('/admin_menu') || text.startsWith('/admin') || text.startsWith('/adminpanel')) {
         const userTgId = fromUser?.id || chatId;
+        const user = getUserByTelegramId(userTgId);
         if (!isAdminTelegramUser(userTgId)) {
           await sendOrEditTelegramMessage(
             botToken,
             chatId,
-            `⛔️ <b>Доступ ограничен</b>\n\nУ вас нет прав администратора для использования этой команды.`,
-            [[{ text: '📱 Главное меню', callback_data: 'action_main_menu' }]]
+            getLocaleText(user, 'access_denied'),
+            [[{ text: getLocaleText(user, 'main_menu'), callback_data: 'action_main_menu' }]]
           );
           return;
         }
@@ -1293,8 +1838,33 @@ async function handleTelegramUpdate(botToken: string, update: any) {
       } else if (text.startsWith('/contacts') || text.startsWith('/managers')) {
         await sendManagersMessage(botToken, chatId);
         return;
-      } else if (text.startsWith('/start') || text.startsWith('/menu')) {
+      } else if (text.startsWith('/admin_post')) {
+        const userTgId = fromUser?.id || chatId;
+        if (!isAdminTelegramUser(userTgId)) {
+          const user = getUserByTelegramId(userTgId);
+          await sendOrEditTelegramMessage(
+            botToken,
+            chatId,
+            getLocaleText(user, 'access_denied'),
+            [[{ text: getLocaleText(user, 'main_menu'), callback_data: 'action_main_menu', style: 'danger' }]]
+          );
+          return;
+        }
+
+        const draft = parseAdminPostPayload(text, chatId, Number(userTgId));
+        if (!draft) {
+          await sendAdminPostHelpMessage(botToken, chatId);
+          return;
+        }
+
+        adminPostDrafts[draft.token] = draft;
+        await sendLanguageSelectionForAdminPost(botToken, chatId, draft, update.message?.message_id);
+        return;
+      } else if (text.startsWith('/start')) {
         isCommandStart = true;
+      } else if (text.startsWith('/menu')) {
+        await sendBotMenuMessage(botToken, chatId);
+        return;
       }
     } else if (update.callback_query) {
       fromUser = update.callback_query.from;
@@ -1312,11 +1882,12 @@ async function handleTelegramUpdate(botToken: string, update: any) {
       if (callbackData === 'action_admin_menu' || callbackData === 'action_admin_stats' || callbackData === 'action_admin_wallets') {
         const userTgId = fromUser?.id || chatId;
         if (!isAdminTelegramUser(userTgId)) {
+          const user = getUserByTelegramId(userTgId);
           await sendOrEditTelegramMessage(
             botToken,
             chatId,
-            `⛔️ <b>Доступ ограничен</b>\n\nУ вас нет прав администратора.`,
-            [[{ text: '📱 Главное меню', callback_data: 'action_main_menu', style: 'danger' }]],
+            getLocaleText(user, 'access_denied'),
+            [[{ text: getLocaleText(user, 'main_menu'), callback_data: 'action_main_menu', style: 'danger' }]],
             messageId
           );
           return;
@@ -1331,8 +1902,47 @@ async function handleTelegramUpdate(botToken: string, update: any) {
           await sendAdminWalletsMessage(botToken, chatId, messageId);
           return;
         }
+      } else if (callbackData === 'action_set_language_ru') {
+        await setUserLanguage(botToken, chatId, 'ru', messageId);
+        return;
+      } else if (callbackData === 'action_set_language_en') {
+        await setUserLanguage(botToken, chatId, 'en', messageId);
+        return;
       } else if (callbackData === 'action_managers' || callbackData === 'action_3') {
         await sendManagersMessage(botToken, chatId, messageId);
+        return;
+      } else if (callbackData === 'action_admin_create_post') {
+        const userTgId = fromUser?.id || chatId;
+        if (!isAdminTelegramUser(userTgId)) {
+          const user = getUserByTelegramId(userTgId);
+          await sendOrEditTelegramMessage(
+            botToken,
+            chatId,
+            getLocaleText(user, 'access_denied'),
+            [[{ text: getLocaleText(user, 'main_menu'), callback_data: 'action_main_menu', style: 'danger' }]],
+            messageId
+          );
+          return;
+        }
+        const token = generateDraftToken();
+        const draft: AdminPostDraft = {
+          token,
+          user_id: Number(userTgId),
+          chat_id: chatId,
+          text: '',
+          buttons: [],
+          state: 'awaiting_image',
+          tempButton: null,
+        };
+        adminPostDrafts[token] = draft;
+        adminDraftSessions[chatId] = token;
+        const text = 'Шаг 1/4: Прикрепите изображение (отправьте фото) или нажмите "Пропустить", чтобы использовать default изображение.';
+        const keyboard = [
+          [{ text: '📷 Отправить фото', callback_data: `admin_post_sendphoto:${token}` }],
+          [{ text: '⏭️ Пропустить', callback_data: `admin_post_skip_image:${token}` }],
+          [{ text: '❌ Отмена', callback_data: `admin_post_cancel:${token}` }],
+        ];
+        await sendOrEditTelegramMessage(botToken, chatId, text, keyboard, messageId);
         return;
       } else if (callbackData === 'action_guarantees' || callbackData === 'action_5') {
         await sendGuaranteesMessage(botToken, chatId, messageId);
@@ -1342,6 +1952,190 @@ async function handleTelegramUpdate(botToken: string, update: any) {
         return;
       } else if (callbackData === 'action_main_menu') {
         await sendBotMenuMessage(botToken, chatId);
+        return;
+      } else if (callbackData === 'action_change_language') {
+        await sendLanguageSelectionMessage(botToken, chatId, messageId);
+        return;
+      } else if (callbackData.startsWith('admin_post_set_language:')) {
+        const userTgId = fromUser?.id || chatId;
+        if (!isAdminTelegramUser(userTgId)) {
+          const user = getUserByTelegramId(userTgId);
+          await sendOrEditTelegramMessage(
+            botToken,
+            chatId,
+            getLocaleText(user, 'access_denied'),
+            [[{ text: getLocaleText(user, 'main_menu'), callback_data: 'action_main_menu', style: 'danger' }]],
+            messageId
+          );
+          return;
+        }
+        const [_, token, language] = callbackData.split(':');
+        const draft = adminPostDrafts[token];
+        const user = getUserByTelegramId(userTgId);
+        if (!draft || !isValidLanguage(language)) {
+          await sendOrEditTelegramMessage(
+            botToken,
+            chatId,
+            localize(user, '⛔️ Драфт не найден или устарел.', '⛔️ Draft not found or expired.'),
+            [[{ text: getLocaleText(user, 'main_menu'), callback_data: 'action_main_menu' }]],
+            messageId
+          );
+          return;
+        }
+        draft.previewLanguage = language as SupportedLanguage;
+        const previewText = buildAdminPostPreviewText(user, draft);
+        await sendOrEditTelegramMessage(botToken, chatId, previewText, buildAdminPostPreviewButtons(draft, draft.previewLanguage), messageId);
+        return;
+      } else if (callbackData.startsWith('admin_post_skip_image:')) {
+        const token = callbackData.split(':')[1];
+        const draft = adminPostDrafts[token];
+        const userTgId = fromUser?.id || chatId;
+        const user = getUserByTelegramId(userTgId);
+        if (!draft) {
+          await sendOrEditTelegramMessage(botToken, chatId, localize(user, '⛔️ Драфт не найден или устарел.', '⛔️ Draft not found or expired.'), [[{ text: getLocaleText(user, 'main_menu'), callback_data: 'action_main_menu' }]], messageId);
+          return;
+        }
+        draft.state = 'awaiting_text';
+        const prompt = localize(user, 'Шаг 2/4: Отправьте текст поста. Для двух языков используйте префиксы ru: и en:', 'Step 2/4: Send post text. For dual-language use prefixes ru: and en:');
+        await sendOrEditTelegramMessage(botToken, chatId, prompt, [[{ text: '❌ Отмена', callback_data: `admin_post_cancel:${token}` }]], messageId);
+        return;
+      } else if (callbackData.startsWith('admin_post_sendphoto:')) {
+        const token = callbackData.split(':')[1];
+        const userTgId = fromUser?.id || chatId;
+        const user = getUserByTelegramId(userTgId);
+        await sendOrEditTelegramMessage(botToken, chatId, localize(user, 'Отправьте фотографию прямо в чат.', 'Please send the photo directly in chat.'), [[{ text: '❌ Отмена', callback_data: `admin_post_cancel:${token}` }]], messageId);
+        return;
+      } else if (callbackData.startsWith('admin_post_add_button:')) {
+        const token = callbackData.split(':')[1];
+        const draft = adminPostDrafts[token];
+        const userTgId = fromUser?.id || chatId;
+        const user = getUserByTelegramId(userTgId);
+        if (!draft) {
+          await sendOrEditTelegramMessage(botToken, chatId, localize(user, '⛔️ Драфт не найден или устарел.', '⛔️ Draft not found or expired.'), [[{ text: getLocaleText(user, 'main_menu'), callback_data: 'action_main_menu' }]], messageId);
+          return;
+        }
+        draft.state = 'awaiting_button';
+        await sendOrEditTelegramMessage(botToken, chatId, localize(user, 'Отправьте текст и ссылку кнопки в формате: Текст кнопки|https://example.com', 'Send button text and URL in format: Button Text|https://example.com'), [[{ text: '❌ Отмена', callback_data: `admin_post_cancel:${token}` }]], messageId);
+        return;
+      } else if (callbackData.startsWith('admin_post_set_button_color:')) {
+        const parts = callbackData.split(':');
+        const token = parts[1];
+        const style = parts[2];
+        const draft = adminPostDrafts[token];
+        const userTgId = fromUser?.id || chatId;
+        const user = getUserByTelegramId(userTgId);
+        if (!draft) {
+          await sendOrEditTelegramMessage(botToken, chatId, localize(user, '⛔️ Драфт не найден или устарел.', '⛔️ Draft not found or expired.'), [[{ text: getLocaleText(user, 'main_menu'), callback_data: 'action_main_menu' }]], messageId);
+          return;
+        }
+        if (!draft.tempButton) draft.tempButton = {};
+        draft.tempButton.style = style;
+        if (draft.tempButton.text && draft.tempButton.url) {
+          draft.buttons.push({ text: draft.tempButton.text, text_en: null, url: draft.tempButton.url });
+        }
+        draft.tempButton = null;
+        draft.state = 'awaiting_schedule';
+        const prompt = localize(user, 'Шаг 3/4: Хотите опубликовать сейчас или задать время?', 'Step 3/4: Publish now or schedule?');
+        const kb = [
+          [{ text: localize(user, 'Опубликовать сейчас', 'Publish now'), callback_data: `admin_post_publish:${token}` }],
+          [{ text: localize(user, 'Задать время', 'Schedule'), callback_data: `admin_post_set_schedule:${token}` }],
+          [{ text: localize(user, 'Отмена', 'Cancel'), callback_data: `admin_post_cancel:${token}` }],
+        ];
+        await sendOrEditTelegramMessage(botToken, chatId, prompt, kb, messageId);
+        return;
+      } else if (callbackData.startsWith('admin_post_set_schedule:')) {
+        const token = callbackData.split(':')[1];
+        const draft = adminPostDrafts[token];
+        const userTgId = fromUser?.id || chatId;
+        const user = getUserByTelegramId(userTgId);
+        if (!draft) {
+          await sendOrEditTelegramMessage(botToken, chatId, localize(user, '⛔️ Драфт не найден или устарел.', '⛔️ Draft not found or expired.'), [[{ text: getLocaleText(user, 'main_menu'), callback_data: 'action_main_menu' }]], messageId);
+          return;
+        }
+        draft.state = 'awaiting_schedule_input';
+        await sendOrEditTelegramMessage(botToken, chatId, localize(user, 'Введите время в формате YYYY-MM-DD HH:mm или relative like "in 30m"', 'Enter schedule like YYYY-MM-DD HH:mm or relative like "in 30m"'), [[{ text: '❌ Отмена', callback_data: `admin_post_cancel:${token}` }]], messageId);
+        return;
+      }
+      } else if (callbackData.startsWith('admin_post_publish:')) {
+        const userTgId = fromUser?.id || chatId;
+        if (!isAdminTelegramUser(userTgId)) {
+          const user = getUserByTelegramId(userTgId);
+          await sendOrEditTelegramMessage(
+            botToken,
+            chatId,
+            getLocaleText(user, 'access_denied'),
+            [[{ text: getLocaleText(user, 'main_menu'), callback_data: 'action_main_menu', style: 'danger' }]],
+            messageId
+          );
+          return;
+        }
+        const token = callbackData.split(':')[1];
+        const draft = adminPostDrafts[token];
+        const user = getUserByTelegramId(userTgId);
+        if (!draft) {
+          await sendOrEditTelegramMessage(botToken, chatId, localize(user, '⛔️ Драфт не найден или устарел.', '⛔️ Draft not found or expired.'), [[{ text: getLocaleText(user, 'main_menu'), callback_data: 'action_main_menu' }]], messageId);
+          return;
+        }
+        try {
+          await sendChannelPost(botToken, draft);
+          delete adminPostDrafts[token];
+          if (adminDraftSessions[draft.chat_id]) delete adminDraftSessions[draft.chat_id];
+          await sendOrEditTelegramMessage(botToken, chatId, localize(user, '✅ Пост успешно опубликован в канале.', '✅ Post successfully published to the channel.'), [[{ text: getLocaleText(user, 'main_menu'), callback_data: 'action_main_menu' }]], messageId);
+        } catch (err) {
+          console.error('Admin post publish error:', err);
+          await sendOrEditTelegramMessage(botToken, chatId, localize(user, '❌ Ошибка при публикации поста. Проверьте URL и попробуйте снова.', '❌ Failed to publish post. Check the URLs and try again.'), [[{ text: getLocaleText(user, 'main_menu'), callback_data: 'action_main_menu' }]], messageId);
+        }
+        return;
+      } else if (callbackData.startsWith('admin_post_schedule:')) {
+        const userTgId = fromUser?.id || chatId;
+        if (!isAdminTelegramUser(userTgId)) {
+          const user = getUserByTelegramId(userTgId);
+          await sendOrEditTelegramMessage(
+            botToken,
+            chatId,
+            getLocaleText(user, 'access_denied'),
+            [[{ text: getLocaleText(user, 'main_menu'), callback_data: 'action_main_menu', style: 'danger' }]],
+            messageId
+          );
+          return;
+        }
+        const token = callbackData.split(':')[1];
+        const draft = adminPostDrafts[token];
+        const user = getUserByTelegramId(userTgId);
+        if (!draft) {
+          await sendOrEditTelegramMessage(botToken, chatId, localize(user, '⛔️ Драфт не найден или устарел.', '⛔️ Draft not found or expired.'), [[{ text: getLocaleText(user, 'main_menu'), callback_data: 'action_main_menu' }]], messageId);
+          return;
+        }
+        if (!draft.scheduleAt) {
+          await sendOrEditTelegramMessage(botToken, chatId, localize(user, '⛔️ Нет времени для расписания. Укажите schedule: значение.', '⛔️ No schedule time configured. Add a schedule: line.'), [[{ text: getLocaleText(user, 'main_menu'), callback_data: 'action_main_menu' }]], messageId);
+          return;
+        }
+        scheduleAdminPost(botToken, draft);
+        if (adminDraftSessions[draft.chat_id]) delete adminDraftSessions[draft.chat_id];
+        delete adminPostDrafts[token];
+        await sendOrEditTelegramMessage(botToken, chatId, localize(user, `🕒 Пост запланирован на ${formatScheduleForDisplay(draft.scheduleAt)}.`, `🕒 Post scheduled for ${formatScheduleForDisplay(draft.scheduleAt)}.`), [[{ text: getLocaleText(user, 'main_menu'), callback_data: 'action_main_menu' }]], messageId);
+        return;
+      } else if (callbackData.startsWith('admin_post_cancel:')) {
+        const userTgId = fromUser?.id || chatId;
+        if (!isAdminTelegramUser(userTgId)) {
+          const user = getUserByTelegramId(userTgId);
+          await sendOrEditTelegramMessage(
+            botToken,
+            chatId,
+            getLocaleText(user, 'access_denied'),
+            [[{ text: getLocaleText(user, 'main_menu'), callback_data: 'action_main_menu', style: 'danger' }]],
+            messageId
+          );
+          return;
+        }
+        const token = callbackData.split(':')[1];
+        const user = getUserByTelegramId(userTgId);
+        if (adminPostDrafts[token]) {
+          const ch = adminPostDrafts[token].chat_id;
+          delete adminPostDrafts[token];
+          if (adminDraftSessions[ch]) delete adminDraftSessions[ch];
+        }
+        await sendOrEditTelegramMessage(botToken, chatId, localize(user, '❌ Публикация отменена.', '❌ Post cancelled.'), [[{ text: getLocaleText(user, 'main_menu'), callback_data: 'action_main_menu' }]], messageId);
         return;
       } else {
         const btnIdStr = callbackData.replace('action_', '');
@@ -1379,6 +2173,7 @@ async function handleTelegramUpdate(botToken: string, update: any) {
           last_name: fromUser.last_name || null,
           next_order_discount_percent: 0,
           is_admin: isAdmin,
+          preferred_language: undefined,
         };
         users.push(user);
       } else {
@@ -1390,7 +2185,12 @@ async function handleTelegramUpdate(botToken: string, update: any) {
     }
 
     if (isCommandStart && chatId) {
-      await sendBotMenuMessage(botToken, chatId);
+      const user = getUserByTelegramId(chatId);
+      if (!user || !isValidLanguage(user.preferred_language)) {
+        await sendLanguageSelectionMessage(botToken, chatId);
+      } else {
+        await sendBotMenuMessage(botToken, chatId);
+      }
     }
   } catch (e) {
     console.error('Error handling Telegram update:', e);
@@ -1465,7 +2265,9 @@ async function sendAdminMenuMessage(botToken: string, chatId: number, messageId?
   const totalReqsCount = serviceRequests.length;
   const totalProductsCount = products.filter((p) => p.is_visible).length;
 
-  const text = `⚙️ <b>ПАНЕЛЬ АДМИНИСТРАТОРА Mediabuy Lab</b>\n` +
+  const user = getUserByTelegramId(chatId);
+  const text = localize(user,
+    `⚙️ <b>ПАНЕЛЬ АДМИНИСТРАТОРА Mediabuy Lab</b>\n` +
     `────────────────────────\n` +
     `Приветствуем в административном меню управления!\n\n` +
     `📊 <b>Текущая сводка:</b>\n` +
@@ -1476,14 +2278,28 @@ async function sendAdminMenuMessage(botToken: string, chatId: number, messageId?
     `🔑 <b>Данные для входа в Веб-админку:</b>\n` +
     `Логин: <code>admin</code>\n` +
     `Пароль: <code>adminpass123</code>\n\n` +
-    `👇 Выберите действие или нажмите кнопку ниже для открытия Admin Mini App:`;
+    `👇 Выберите действие или нажмите кнопку ниже для открытия Admin Mini App:`,
+    `⚙️ <b>ADMIN PANEL Mediabuy Lab</b>\n` +
+    `────────────────────────\n` +
+    `Welcome to the administration control panel!\n\n` +
+    `📊 <b>Current summary:</b>\n` +
+    `• Total orders: <b>${totalOrdersCount}</b> (waiting payment: <b>${waitingOrdersCount}</b>)\n` +
+    `• Launch/Training requests: <b>${totalReqsCount}</b>\n` +
+    `• Active products in catalog: <b>${totalProductsCount}</b>\n` +
+    `• Users in database: <b>${users.length}</b>\n\n` +
+    `🔑 <b>Admin panel access:</b>\n` +
+    `Login: <code>admin</code>\n` +
+    `Password: <code>adminpass123</code>\n\n` +
+    `👇 Select an action or press the button below to open the Admin Mini App:`
+  );
 
   const inline_keyboard = [
-    [{ text: '🔐 Открыть Admin Mini App', web_app: { url: adminMiniAppUrl }, style: 'success' }],
-    [{ text: '🌐 Открыть Веб-Панель в браузере', url: adminDirectUrl, style: 'primary' }],
-    [{ text: '📊 Быстрая статистика', callback_data: 'action_admin_stats', style: 'primary' }],
-    [{ text: '💳 Кошельки и реквизиты', callback_data: 'action_admin_wallets', style: 'primary' }],
-    [{ text: '🔙 Назад в главное меню', callback_data: 'action_main_menu', style: 'danger' }],
+    [{ text: localize(user, '✍️ Создать пост в канал', '✍️ Create channel post'), callback_data: 'action_admin_create_post', style: 'primary' }],
+    [{ text: localize(user, '🔐 Открыть Admin Mini App', '🔐 Open Admin Mini App'), web_app: { url: adminMiniAppUrl }, style: 'success' }],
+    [{ text: localize(user, '🌐 Открыть Веб-Панель в браузере', '🌐 Open Web Panel in browser'), url: adminDirectUrl, style: 'primary' }],
+    [{ text: localize(user, '📊 Быстрая статистика', '📊 Quick stats'), callback_data: 'action_admin_stats', style: 'primary' }],
+    [{ text: localize(user, '💳 Кошельки и реквизиты', '💳 Wallets & details'), callback_data: 'action_admin_wallets', style: 'primary' }],
+    [{ text: getLocaleText(user, 'main_menu'), callback_data: 'action_main_menu', style: 'danger' }],
   ];
 
   await sendOrEditTelegramMessage(botToken, chatId, text, inline_keyboard, messageId);
@@ -1506,7 +2322,9 @@ async function sendAdminStatsMessage(botToken: string, chatId: number, messageId
   const launchReqs = serviceRequests.filter((r) => r.request_type === 'launch_ads').length;
   const trainingReqs = serviceRequests.filter((r) => r.request_type === 'training').length;
 
-  const text = `📊 <b>СТАТИСТИКА И СВОДКА (АДМИН)</b>\n` +
+  const user = getUserByTelegramId(chatId);
+  const text = localize(user,
+    `📊 <b>СТАТИСТИКА И СВОДКА (АДМИН)</b>\n` +
     `────────────────────────\n` +
     `💰 <b>Общая сумма заказов:</b> $${totalRevenue.toFixed(2)} USD\n` +
     `📦 <b>Всего заказов:</b> ${orders.length}\n` +
@@ -1514,12 +2332,22 @@ async function sendAdminStatsMessage(botToken: string, chatId: number, messageId
     `🚀 <b>Заявок на Запуск:</b> ${launchReqs}\n` +
     `🎓 <b>Заявок на Обучение:</b> ${trainingReqs}\n\n` +
     `👤 <b>Пользователей в системе:</b> ${users.length}\n` +
-    `🛍 <b>Товаров в каталоге:</b> ${products.length}`;
+    `🛍 <b>Товаров в каталоге:</b> ${products.length}`,
+    `📊 <b>ADMIN STATISTICS & SUMMARY</b>\n` +
+    `────────────────────────\n` +
+    `💰 <b>Total order value:</b> $${totalRevenue.toFixed(2)} USD\n` +
+    `📦 <b>Total orders:</b> ${orders.length}\n` +
+    `⏳ <b>Waiting payment:</b> ${waitingOrders.length}\n\n` +
+    `🚀 <b>Launch requests:</b> ${launchReqs}\n` +
+    `🎓 <b>Training requests:</b> ${trainingReqs}\n\n` +
+    `👤 <b>Total users:</b> ${users.length}\n` +
+    `🛍 <b>Products in catalog:</b> ${products.length}`
+  );
 
   const inline_keyboard = [
-    [{ text: '🔄 Обновить статистику', callback_data: 'action_admin_stats', style: 'primary' }],
-    [{ text: '⚙️ Назад в Админ Меню', callback_data: 'action_admin_menu', style: 'primary' }],
-    [{ text: '🔙 Главное меню', callback_data: 'action_main_menu', style: 'danger' }],
+    [{ text: localize(user, '🔄 Обновить статистику', '🔄 Refresh stats'), callback_data: 'action_admin_stats', style: 'primary' }],
+    [{ text: localize(user, '⚙️ Назад в Админ Меню', '⚙️ Back to Admin Menu'), callback_data: 'action_admin_menu', style: 'primary' }],
+    [{ text: getLocaleText(user, 'main_menu'), callback_data: 'action_main_menu', style: 'danger' }],
   ];
 
   await sendOrEditTelegramMessage(botToken, chatId, text, inline_keyboard, messageId);
@@ -1540,58 +2368,85 @@ async function sendAdminWalletsMessage(botToken: string, chatId: number, message
   const bep20 = process.env.CRYPTO_WALLET_BEP20 || '0x71C7656EC7ab88b098defB751B7401B5f6d8976F';
   const btc = process.env.CRYPTO_WALLET_BTC || '1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa';
 
-  const text = `💳 <b>КОШЕЛЬКИ ДЛЯ ПРИЕМА ОПЛАТЫ</b>\n` +
+  const user = getUserByTelegramId(chatId);
+  const text = localize(user,
+    `💳 <b>КОШЕЛЬКИ ДЛЯ ПРИЕМА ОПЛАТЫ</b>\n` +
     `────────────────────────\n` +
     `<b>USDT TRC20:</b>\n<code>${trc20}</code>\n\n` +
     `<b>USDT BEP20:</b>\n<code>${bep20}</code>\n\n` +
     `<b>Bitcoin (BTC):</b>\n<code>${btc}</code>\n\n` +
-    `<i>Вы можете изменить эти кошельки через переменные окружения (.env) или в Admin Mini App.</i>`;
+    `<i>Вы можете изменить эти кошельки через переменные окружения (.env) или в Admin Mini App.</i>`,
+    `💳 <b>PAYMENT WALLETS</b>\n` +
+    `────────────────────────\n` +
+    `<b>USDT TRC20:</b>\n<code>${trc20}</code>\n\n` +
+    `<b>USDT BEP20:</b>\n<code>${bep20}</code>\n\n` +
+    `<b>Bitcoin (BTC):</b>\n<code>${btc}</code>\n\n` +
+    `<i>You can change these wallets via environment variables (.env) or in the Admin Mini App.</i>`
+  );
 
   const inline_keyboard = [
-    [{ text: '⚙️ Назад в Админ Меню', callback_data: 'action_admin_menu', style: 'primary' }],
-    [{ text: '🔙 Главное меню', callback_data: 'action_main_menu', style: 'danger' }],
+    [{ text: localize(user, '⚙️ Назад в Админ Меню', '⚙️ Back to Admin Menu'), callback_data: 'action_admin_menu', style: 'primary' }],
+    [{ text: getLocaleText(user, 'main_menu'), callback_data: 'action_main_menu', style: 'danger' }],
   ];
 
   await sendOrEditTelegramMessage(botToken, chatId, text, inline_keyboard, messageId);
 }
 
 async function sendManagersMessage(botToken: string, chatId: number, messageId?: number) {
-  const text = `👨‍💻 <b>Наши Менеджеры Mediabuy Lab</b>\n\n` +
+  const user = getUserByTelegramId(chatId);
+  const text = localize(user,
+    `👨‍💻 <b>Наши Менеджеры Mediabuy Lab</b>\n\n` +
     `Наша команда специалистов готова проконсультировать вас по закупке аккаунтов, запуску рекламных кампаний и обучению:\n\n` +
     `🛡️ <b>Главный Админ:</b> @mediabuy_adm — Персональные вопросы и оптовые сделки\n` +
     `👤 <b>Менеджер Сергей:</b> @sergey_mediabuy — Консультации и поддержка\n` +
     `👤 <b>Менеджер Антон:</b> @Anton_mediabuy — Подбор аккаунтов и консультации по запуску\n` +
-    `👤 <b>Менеджер Виктория:</b> @Victorys_mediabuy — Вопросы по обучению клиентов`;
+    `👤 <b>Менеджер Виктория:</b> @Victorys_mediabuy — Вопросы по обучению клиентов`,
+    `👨‍💻 <b>Our Mediabuy Lab Managers</b>\n\n` +
+    `Our team of specialists is ready to consult you on account purchases, ad launches, and training:\n\n` +
+    `🛡️ <b>Main Admin:</b> @mediabuy_adm — Personal inquiries and wholesale deals\n` +
+    `👤 <b>Manager Sergey:</b> @sergey_mediabuy — Consultations and support\n` +
+    `👤 <b>Manager Anton:</b> @Anton_mediabuy — Account selection and launch consultations\n` +
+    `👤 <b>Manager Victoria:</b> @Victorys_mediabuy — Training inquiries`);
 
   const inline_keyboard = [
-    [{ text: '🛡️ Главный Админ', url: 'https://t.me/mediabuy_adm', style: 'primary' }],
-    [{ text: '👤 Менеджер Сергей', url: 'https://t.me/sergey_mediabuy', style: 'primary' }],
-    [{ text: '👤 Менеджер Антон', url: 'https://t.me/Anton_mediabuy', style: 'primary' }],
-    [{ text: '👤 Менеджер Виктория', url: 'https://t.me/Victorys_mediabuy', style: 'primary' }],
-    [{ text: '🔙 Назад в главное меню', callback_data: 'action_main_menu', style: 'danger' }],
+    [{ text: localize(user, '🛡️ Главный Админ', '🛡️ Main Admin'), url: 'https://t.me/mediabuy_adm', style: 'primary' }],
+    [{ text: localize(user, '👤 Менеджер Сергей', '👤 Manager Sergey'), url: 'https://t.me/sergey_mediabuy', style: 'primary' }],
+    [{ text: localize(user, '👤 Менеджер Антон', '👤 Manager Anton'), url: 'https://t.me/Anton_mediabuy', style: 'primary' }],
+    [{ text: localize(user, '👤 Менеджер Виктория', '👤 Manager Victoria'), url: 'https://t.me/Victorys_mediabuy', style: 'primary' }],
+    [{ text: getLocaleText(user, 'main_menu'), callback_data: 'action_main_menu', style: 'danger' }],
   ];
 
   await sendOrEditTelegramMessage(botToken, chatId, text, inline_keyboard, messageId);
 }
 
 async function sendGuaranteesMessage(botToken: string, chatId: number, messageId?: number) {
+  const user = getUserByTelegramId(chatId);
   let miniAppUrl = process.env.MINI_APP_URL || process.env.WEB_ADMIN_URL || 'http://localhost:3000';
   if (!miniAppUrl.startsWith('http://') && !miniAppUrl.startsWith('https://')) {
     miniAppUrl = `https://${miniAppUrl}`;
   }
 
-  const text = `🛡️ <b>Гарантии качества Mediabuy Lab</b>\n\n` +
+  const text = localize(user,
+    `🛡️ <b>Гарантии качества Mediabuy Lab</b>\n\n` +
     `Мы ценим доверие наших клиентов и обеспечиваем максимальную надежность на каждом этапе:\n\n` +
     `1️⃣ <b>100% Проверка качества:</b> Все аккаунты проходят ручную проверку, отлежку и прогрев перед продажей.\n` +
     `2️⃣ <b>Замена в течение 24 часов:</b> При обнаружении невалидности при первом входе бесплатно делаем замену.\n` +
     `3️⃣ <b>Официальные услуги:</b> Прозрачные условия на запуск рекламы и программы обучения с ведением до результата.\n` +
     `4️⃣ <b>Безопасные платежи:</b> Поддержка оплаты через криптовалюту и гарантированные сервисы.\n` +
-    `5️⃣ <b>Поддержка 24/7:</b> Наша команда менеджеров всегда на связи и готова помочь в любых ситуациях.`;
+    `5️⃣ <b>Поддержка 24/7:</b> Наша команда менеджеров всегда на связи и готова помочь в любых ситуациях.`,
+    `🛡️ <b>Mediabuy Lab Quality Guarantees</b>\n\n` +
+    `We value our clients' trust and provide maximum reliability at every stage:\n\n` +
+    `1️⃣ <b>100% Quality check:</b> All accounts go through manual verification, warming, and preparation before sale.\n` +
+    `2️⃣ <b>Replacement within 24 hours:</b> If invalidity is found on first login, we provide a free replacement.\n` +
+    `3️⃣ <b>Official services:</b> Transparent conditions for ad launches and training programs through result delivery.\n` +
+    `4️⃣ <b>Secure payments:</b> Support for cryptocurrency payments and guaranteed services.\n` +
+    `5️⃣ <b>24/7 Support:</b> Our manager team is always available to help in any situation.`
+  );
 
   const inline_keyboard = [
-    [{ text: '🚀 Открыть Mini App (Каталог)', web_app: { url: miniAppUrl }, style: 'success' }],
-    [{ text: '👨‍💻 Связаться с менеджером', callback_data: 'action_managers', style: 'primary' }],
-    [{ text: '🔙 Назад в главное меню', callback_data: 'action_main_menu', style: 'danger' }],
+    [{ text: getLocaleText(user, 'open_mini_app'), web_app: { url: miniAppUrl }, style: 'success' }],
+    [{ text: localize(user, '👨‍💻 Связаться с менеджером', '👨‍💻 Contact a manager'), callback_data: 'action_managers', style: 'primary' }],
+    [{ text: getLocaleText(user, 'main_menu'), callback_data: 'action_main_menu', style: 'danger' }],
   ];
 
   await sendOrEditTelegramMessage(botToken, chatId, text, inline_keyboard, messageId);
@@ -1605,22 +2460,31 @@ async function sendDocsMessage(botToken: string, chatId: number, messageId?: num
   const docMiniAppUrl = `${miniAppUrl}/#/documents`;
   const registryUrl = 'https://find-and-update.company-information.service.gov.uk/company/10549229';
 
-  const text = `🏛 <b>Официальная регистрация Mediabuy Lab (Companies House)</b>\n\n` +
+  const user = getUserByTelegramId(chatId);
+  const text = localize(user,
+    `🏛 <b>Официальная регистрация Mediabuy Lab (Companies House)</b>\n\n` +
     `Мы являемся официально зарегистрированной компанией в государственном реестре Великобритании (Companies House, № 10549229).\n\n` +
     `🔗 <b>Ссылка на государственный реестр:</b>\n` +
     `${registryUrl}\n\n` +
-    `👇 Вы можете проверить статус компании и все регистрационные данные:`;
+    `👇 Вы можете проверить статус компании и все регистрационные данные:`,
+    `🏛 <b>Official Mediabuy Lab Registration (Companies House)</b>\n\n` +
+    `We are an officially registered company in the UK Companies House registry (No. 10549229).\n\n` +
+    `🔗 <b>Registry link:</b>\n` +
+    `${registryUrl}\n\n` +
+    `👇 You can verify the company status and registration details:`
+  );
 
   const inline_keyboard = [
-    [{ text: '🏛 Открыть реестр Великобритании', url: registryUrl, style: 'primary' }],
-    [{ text: '📱 Открыть раздел в Mini App', web_app: { url: docMiniAppUrl }, style: 'success' }],
-    [{ text: '🔙 Назад в главное меню', callback_data: 'action_main_menu', style: 'danger' }],
+    [{ text: getLocaleText(user, 'docs_link'), url: registryUrl, style: 'primary' }],
+    [{ text: getLocaleText(user, 'docs_open_section'), web_app: { url: docMiniAppUrl }, style: 'success' }],
+    [{ text: getLocaleText(user, 'main_menu'), callback_data: 'action_main_menu', style: 'danger' }],
   ];
 
   await sendOrEditTelegramMessage(botToken, chatId, text, inline_keyboard, messageId);
 }
 
 async function sendBotMenuMessage(botToken: string, chatId: number) {
+  const user = getUserByTelegramId(chatId);
   let miniAppUrl = process.env.MINI_APP_URL || process.env.WEB_ADMIN_URL || 'http://localhost:3000';
   if (!miniAppUrl.startsWith('http://') && !miniAppUrl.startsWith('https://')) {
     miniAppUrl = `https://${miniAppUrl}`;
@@ -1630,7 +2494,7 @@ async function sendBotMenuMessage(botToken: string, chatId: number) {
   const rawButtons = homeSettings.bot_buttons || [];
 
   for (const btn of rawButtons) {
-    const btnText = btn.text || 'Кнопка';
+    const btnText = localizeButtonText(user, btn);
     const btnTextLower = btnText.toLowerCase();
     const btnStyle = btn.style || 'primary';
 
@@ -1650,7 +2514,7 @@ async function sendBotMenuMessage(botToken: string, chatId: number) {
           style: btnStyle,
         },
       ]);
-    } else if (btnTextLower.includes('менеджер') || btn.id === 3) {
+    } else if (btnTextLower.includes('менеджер') || btnTextLower.includes('manager') || btn.id === 3) {
       inline_keyboard.push([
         {
           text: btnText,
@@ -1658,7 +2522,7 @@ async function sendBotMenuMessage(botToken: string, chatId: number) {
           style: btnStyle,
         },
       ]);
-    } else if (btnTextLower.includes('гарант') || btn.id === 5) {
+    } else if (btnTextLower.includes('гарант') || btnTextLower.includes('guarantee') || btn.id === 5) {
       inline_keyboard.push([
         {
           text: btnText,
@@ -1677,29 +2541,36 @@ async function sendBotMenuMessage(botToken: string, chatId: number) {
     }
   }
 
+  inline_keyboard.push([
+    { text: getLocaleText(user, 'change_language'), callback_data: 'action_change_language', style: 'default' },
+  ]);
+
   if (inline_keyboard.length === 0) {
     inline_keyboard.push([
       {
-        text: '🚀 Открыть Mini App',
+        text: getLocaleText(user, 'open_mini_app'),
         web_app: { url: miniAppUrl },
         style: 'success',
       },
     ]);
   }
 
-  // Append Admin Menu button ONLY for authorized Admin Users
   if (isAdminTelegramUser(chatId)) {
     inline_keyboard.push([
       {
-        text: '⚙️ Панель Администратора',
+        text: getLocaleText(user, 'admin_panel_title'),
         callback_data: 'action_admin_menu',
         style: 'primary',
       },
     ]);
   }
 
-  const title = homeSettings.bot_menu_title || '🔥 Mediabuy Lab Bot';
-  const desc = homeSettings.bot_menu_description || 'Добро пожаловать в бота!';
+  const title = getPreferredLanguage(user) === 'en'
+    ? homeSettings.bot_menu_title_en || homeSettings.bot_menu_title
+    : homeSettings.bot_menu_title;
+  const desc = getPreferredLanguage(user) === 'en'
+    ? homeSettings.bot_menu_description_en || homeSettings.bot_menu_description
+    : homeSettings.bot_menu_description;
   const fullText = `<b>${title}</b>\n\n${desc}`;
 
   const photoUrl = homeSettings.bot_menu_image_url;
@@ -1789,8 +2660,11 @@ app.post('/api/orders', (req, res) => {
   const cryptoAmountStr = calculateCryptoAmount(finalUsdAmount, crypto_currency);
   const qrCodeUrlStr = `https://api.qrserver.com/v1/create-qr-code/?size=250x250&data=${encodeURIComponent(assignedWallet)}`;
 
+  const orderNumber = generateOrderNumber();
   const order: Order = {
     id: nextOrderId++,
+    order_number: orderNumber,
+    telegram_user_id: user.telegram_id,
     user_id: user.id,
     currency,
     total_amount: finalUsdAmount,
@@ -1823,7 +2697,7 @@ app.post('/api/orders', (req, res) => {
   const fullName = [user.first_name, user.last_name].filter(Boolean).join(' ') || 'Пользователь';
 
   getGeoAndDeviceInfo(req).then(({ ip, device, geoStr }) => {
-    const orderMsg = `⚡️ <b>НОВЫЙ КРИПТО-ЗАКАЗ #${order.id} (Прямой перевод)</b>\n` +
+    const orderMsg = `⚡️ <b>НОВЫЙ КРИПТО-ЗАКАЗ #${order.order_number} (Прямой перевод)</b>\n` +
       `────────────────────────\n` +
       `👤 <b>Покупатель:</b> ${fullName} (${usernameText})\n` +
       `🆔 <b>Telegram ID:</b> <code>${user.telegram_id}</code>\n` +
@@ -1864,7 +2738,7 @@ app.post('/api/orders/:id/send-telegram-receipt', async (req, res) => {
   const fullName = [user.first_name, user.last_name].filter(Boolean).join(' ') || 'Пользователь';
 
   const receiptMsg =
-    `🧾 <b>ОФИЦИАЛЬНЫЙ ЧЕК И РЕКВИЗИТЫ НА ОПЛАТУ ЗАКАЗА #${order.id}</b>\n` +
+    `🧾 <b>ОФИЦИАЛЬНЫЙ ЧЕК И РЕКВИЗИТЫ НА ОПЛАТУ ЗАКАЗА #${order.order_number}</b>\n` +
     `────────────────────────\n` +
     `🏢 <b>Сервис:</b> Mediabuy Lab — Digital Agency & Farm Accounts Store\n` +
     `👤 <b>Покупатель:</b> ${fullName} (${usernameText})\n` +
@@ -1907,7 +2781,7 @@ app.post('/api/orders/:id/send-telegram-receipt', async (req, res) => {
   }
 
   // Also send notification log to admin
-  const adminLogMsg = `📩 <b>ПОЛЬЗОВАТЕЛЬ ЗАПРОСИЛ ЧЕК В TELEGRAM ПО ЗАКАЗУ #${order.id}</b>\n` +
+  const adminLogMsg = `📩 <b>ПОЛЬЗОВАТЕЛЬ ЗАПРОСИЛ ЧЕК В TELEGRAM ПО ЗАКАЗУ #${order.order_number}</b>\n` +
     `👤 <b>Клиент:</b> ${fullName} (${usernameText})\n` +
     `💵 <b>Сумма:</b> $${order.total_amount} USD (${order.crypto_amount})\n` +
     `📫 <b>Кошелек:</b> <code>${order.assigned_wallet}</code>`;
@@ -1945,7 +2819,7 @@ app.post('/api/orders/:id/txid', async (req, res) => {
       sendTelegramAdminNotification(
         `✅ <b>ОПЛАТА ПОДТВЕРЖДЕНА АВТОМАТИЧЕСКИ!</b>\n` +
         `────────────────────────\n` +
-        `📦 <b>Заказ:</b> #${order.id}\n` +
+        `📦 <b>Заказ:</b> #${order.order_number}\n` +
         `💵 <b>Сумма:</b> $${order.total_amount} USD (${order.crypto_amount})\n` +
         `🌐 <b>Сеть:</b> ${order.crypto_currency}\n` +
         `🔗 <b>TXID:</b> <code>${txid}</code>\n` +
@@ -1956,7 +2830,7 @@ app.post('/api/orders/:id/txid', async (req, res) => {
     return res.json({ verified: true, order, message: 'Оплата успешно подтверждена в блокчейне!' });
   } else {
     sendTelegramAdminNotification(
-      `🔍 <b>КЛИЕНТ УКАЗАЛ TXID ПО ЗАКАЗУ #${order.id}</b>\n` +
+      `🔍 <b>КЛИЕНТ УКАЗАЛ TXID ПО ЗАКАЗУ #${order.order_number}</b>\n` +
       `────────────────────────\n` +
       `🔗 <b>TXID:</b> <code>${txid}</code>\n` +
       `💵 <b>Сумма:</b> $${order.total_amount} USD (${order.crypto_amount})\n` +
@@ -1969,6 +2843,118 @@ app.post('/api/orders/:id/txid', async (req, res) => {
       order,
       message: verification.reason || 'Транзакция отправлена на проверку в сети блокчейн...'
     });
+  }
+});
+
+// --- Web Admin: Channel ID and Post endpoints ---
+app.get('/api/admin/channel-id', requireAdmin, (req, res) => {
+  const channelId = process.env.PUBLIC_CHANNEL_CHAT_ID || process.env.TELEGRAM_CHANNEL_CHAT_ID || process.env.TELEGRAM_CHANNEL_ID || process.env.ADMIN_CHANNEL_ID || '-1002061825930';
+  res.json({ channel_id: channelId });
+});
+
+app.post('/api/admin/posts/draft', requireAdmin, upload.single('image'), (req, res) => {
+  try {
+    const user = getUserFromReq(req);
+    const token = generateDraftToken();
+    const draft: AdminPostDraft = {
+      token,
+      user_id: user.id,
+      chat_id: user.telegram_id || 0,
+      text: req.body.text || '',
+      text_en: req.body.text_en || undefined,
+      image_url: undefined,
+        buttons: [],
+        channel_title: req.body.channel_title || undefined,
+      previewLanguage: (req.body.previewLanguage && isValidLanguage(req.body.previewLanguage) ? req.body.previewLanguage : undefined) as any,
+      tempButton: null,
+    };
+
+      // support passing multiple buttons as JSON string in form field 'buttons'
+      if (req.body && req.body.buttons) {
+        try {
+          const parsed = typeof req.body.buttons === 'string' ? JSON.parse(req.body.buttons) : req.body.buttons;
+          if (Array.isArray(parsed)) {
+            draft.buttons = parsed.map((b: any) => ({ text: b.text || '', text_en: b.text_en || null, url: b.url || '', ...(b.style ? { style: b.style } : {}) }));
+          }
+        } catch (e) {
+          // ignore parse errors
+          console.error('Failed to parse admin draft buttons JSON:', e);
+        }
+      }
+
+    if (req.file) {
+      // Move to permanent uploads/home
+      const destDir = path.join(uploadsDir, 'home');
+      if (!fs.existsSync(destDir)) fs.mkdirSync(destDir, { recursive: true });
+      const ext = path.extname(req.file.originalname) || '.jpg';
+      const newName = `${token}${ext}`;
+      const destPath = path.join(destDir, newName);
+      fs.renameSync(req.file.path, destPath);
+      draft.image_url = path.relative(process.cwd(), destPath).replace(/\\/g, '/');
+    } else if (req.body.use_public_image === '1') {
+      const pubPath = path.join('public', 'post_picture.png');
+      if (fs.existsSync(path.join(process.cwd(), pubPath))) {
+        draft.image_url = pubPath;
+      }
+    } else if (req.body.image_url) {
+      draft.image_url = req.body.image_url;
+    }
+
+    if (req.body.button_text && req.body.button_url) {
+      draft.buttons.push({ text: req.body.button_text, text_en: req.body.button_text_en || null, url: req.body.button_url });
+      // store style if provided
+      if ((req.body.button_color || '').trim()) {
+        (draft.buttons[0] as any).style = req.body.button_color;
+      }
+    }
+
+    if (req.body.scheduleAt) {
+      const parsed = parseScheduleValue(req.body.scheduleAt);
+      if (parsed) draft.scheduleAt = parsed;
+    }
+
+    adminPostDrafts[token] = draft;
+
+    const previewText = buildAdminPostPreviewText(user, draft);
+    const buttons = buildAdminPostPreviewButtons(draft, getDraftPreviewLanguage(user, draft));
+    res.json({ ok: true, token, previewText, previewButtons: buttons, previewImageUrl: draft.image_url ? `/${draft.image_url}` : null });
+  } catch (err) {
+    console.error('Admin web draft error:', err);
+    res.status(500).json({ ok: false, detail: 'Failed to create draft' });
+  }
+});
+
+app.post('/api/admin/posts/publish', requireAdmin, async (req, res) => {
+  try {
+    const { token, publishNow = '1', scheduleAt, channel_chat_id } = req.body;
+    const draft = adminPostDrafts[token];
+    if (!draft) return res.status(404).json({ ok: false, detail: 'Draft not found' });
+
+    if (scheduleAt) {
+      const parsed = parseScheduleValue(scheduleAt);
+      if (!parsed) return res.status(400).json({ ok: false, detail: 'Invalid schedule format' });
+      draft.scheduleAt = parsed;
+    }
+
+    const botToken = process.env.BOT_TOKEN || process.env.TELEGRAM_BOT_TOKEN;
+    if (!botToken) return res.status(500).json({ ok: false, detail: 'Bot token not configured' });
+
+    if (publishNow === '1' && !draft.scheduleAt) {
+      await sendChannelPost(botToken, draft, channel_chat_id);
+      delete adminPostDrafts[token];
+      return res.json({ ok: true, published: true });
+    }
+
+    if (draft.scheduleAt) {
+      scheduleAdminPost(botToken, draft);
+      delete adminPostDrafts[token];
+      return res.json({ ok: true, scheduled: true, scheduleAt: draft.scheduleAt });
+    }
+
+    return res.json({ ok: true, saved: true });
+  } catch (err) {
+    console.error('Admin web publish error:', err);
+    res.status(500).json({ ok: false, detail: 'Failed to publish draft' });
   }
 });
 
@@ -1998,7 +2984,7 @@ app.post('/api/orders/:id/check-payment', async (req, res) => {
       order.payment_verified_auto = true;
       notifyCustomerAboutOrderStatus(order, 'paid', 'Автоматическая проверка транзакции прошла успешно!');
       sendTelegramAdminNotification(
-        `✅ <b>ОПЛАТА ПОДТВЕРЖДЕНА АВТОМАТИЧЕСКИ!</b>\nЗаказ #${order.id}\nTXID: <code>${order.txid}</code>`
+        `✅ <b>ОПЛАТА ПОДТВЕРЖДЕНА АВТОМАТИЧЕСКИ!</b>\nЗаказ #${order.order_number}\nTXID: <code>${order.txid}</code>`
       );
       return res.json({ verified: true, order, message: 'Оплата успешно подтверждена!' });
     }
